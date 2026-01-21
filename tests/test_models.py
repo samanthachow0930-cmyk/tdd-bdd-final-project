@@ -30,6 +30,7 @@ from decimal import Decimal
 from service.models import Product, Category, db
 from service import app
 from tests.factories import ProductFactory
+from service.models import DataValidationError
 
 DATABASE_URI = os.getenv(
     "DATABASE_URI", "postgresql://postgres:postgres@localhost:5432/postgres"
@@ -197,3 +198,177 @@ class TestProductModel(unittest.TestCase):
         self.assertEqual(found.count(), count)
         for product in found:
             self.assertEqual(product.category, category)
+
+    def test_deserialize_with_invalid_category(self):
+        """It should raise DataValidationError for invalid category (Line 106)"""
+        product = Product()
+        invalid_data = {
+            "name": "Test Product",
+            "description": "Test Description",
+            "price": "10.99",
+            "available": True,
+            "category": "INVALID_CATEGORY"  # This will cause AttributeError
+        }
+        
+        with self.assertRaises(DataValidationError) as context:
+            product.deserialize(invalid_data)
+        
+        # Check that it's the specific AttributeError from line 106
+        self.assertIn("Invalid attribute: INVALID_CATEGORY", str(context.exception))
+
+    def test_find_by_price_with_string_quotes(self):
+        """It should find Products by price when price is string with quotes (Line 139)"""
+        # Create a test product
+        product = ProductFactory()
+        product.price = Decimal("19.99")
+        product.create()
+        
+        # Test with string price that has quotes and spaces
+        products = Product.find_by_price(' "19.99" ')  # This triggers line 139
+        products_list = list(products)
+        
+        self.assertEqual(len(products_list), 1)
+        self.assertEqual(products_list[0].price, Decimal("19.99"))
+
+    def test_find_by_price_with_plain_string(self):
+        """It should find Products by price when price is plain string (Line 139)"""
+        # Create a test product
+        product = ProductFactory()
+        product.price = Decimal("29.99")
+        product.create()
+        
+        # Test with plain string price
+        products = Product.find_by_price("29.99")  # This also triggers line 139
+        products_list = list(products)
+        
+        self.assertEqual(len(products_list), 1)
+        self.assertEqual(products_list[0].price, Decimal("29.99"))
+
+    def test_find_by_price_with_decimal(self):
+        """It should find Products by price when price is Decimal (Line 139)"""
+        # Create a test product
+        product = ProductFactory()
+        product.price = Decimal("39.99")
+        product.create()
+        
+        # Test with Decimal price (bypasses the if statement on line 139)
+        products = Product.find_by_price(Decimal("39.99"))
+        products_list = list(products)
+        
+        self.assertEqual(len(products_list), 1)
+        self.assertEqual(products_list[0].price, Decimal("39.99"))
+
+    def test_find_by_availability_default(self):
+        """It should find available Products by default (Line 145)"""
+        # Create both available and unavailable products
+        available_product = ProductFactory(available=True)
+        available_product.create()
+        
+        unavailable_product = ProductFactory(available=False)
+        unavailable_product.create()
+        
+        # Call without argument to use default (True)
+        products = Product.find_by_availability()  # Line 145 default parameter
+        products_list = list(products)
+        
+        # Should only find available products
+        self.assertEqual(len(products_list), 1)
+        self.assertTrue(products_list[0].available)
+
+    def test_find_by_availability_false(self):
+        """It should find unavailable Products (Line 145)"""
+        # Create both available and unavailable products
+        available_product = ProductFactory(available=True)
+        available_product.create()
+        
+        unavailable_product = ProductFactory(available=False)
+        unavailable_product.create()
+        
+        # Find unavailable products
+        products = Product.find_by_availability(False)
+        products_list = list(products)
+        
+        # Should only find unavailable products
+        self.assertEqual(len(products_list), 1)
+        self.assertFalse(products_list[0].available)
+
+    def test_find_by_category_default(self):
+        """It should find Products with UNKNOWN category by default (Lines 148-149)"""
+        # Create products with different categories
+        unknown_product = ProductFactory(category=Category.UNKNOWN)
+        unknown_product.create()
+        
+        cloths_product = ProductFactory(category=Category.CLOTHS)
+        cloths_product.create()
+        
+        # Call without argument to use default (Category.UNKNOWN)
+        products = Product.find_by_category()  # Lines 148-149 default parameter
+        products_list = list(products)
+        
+        # Should only find UNKNOWN category products
+        self.assertEqual(len(products_list), 1)
+        self.assertEqual(products_list[0].category, Category.UNKNOWN)
+
+    def test_find_by_category_specific(self):
+        """It should find Products with specific category (Lines 217-221)"""
+        # Create products with different categories
+        cloths_product1 = ProductFactory(category=Category.CLOTHS)
+        cloths_product1.create()
+        
+        cloths_product2 = ProductFactory(category=Category.CLOTHS)
+        cloths_product2.create()
+        
+        food_product = ProductFactory(category=Category.FOOD)
+        food_product.create()
+        
+        # Find CLOTHS category products
+        products = Product.find_by_category(Category.CLOTHS)
+        products_list = list(products)
+        
+        # Should only find CLOTHS category products
+        self.assertEqual(len(products_list), 2)
+        for product in products_list:
+            self.assertEqual(product.category, Category.CLOTHS)
+
+    def test_find_by_category_logging(self):
+        """It should log when finding by category (Lines 217-221 include logging)"""
+        # Create a product
+        product = ProductFactory(category=Category.TOOLS)
+        product.create()
+        
+        # This should trigger the logger.info on line 149/221
+        products = Product.find_by_category(Category.TOOLS)
+        products_list = list(products)
+        
+        self.assertEqual(len(products_list), 1)
+        self.assertEqual(products_list[0].category, Category.TOOLS)
+
+    def test_update_with_empty_id(self):
+        """It should raise DataValidationError when updating with empty ID"""
+        product = ProductFactory()
+        # Don't create it, so id is None
+        product.id = None
+        
+        with self.assertRaises(DataValidationError) as context:
+            product.update()
+        
+        self.assertIn("Update called with empty ID field", str(context.exception))
+
+    def test_deserialize_with_non_dict_data(self):
+        """It should raise DataValidationError for non-dict data (TypeError)"""
+        product = Product()
+        
+        # Pass a string instead of dict
+        with self.assertRaises(DataValidationError) as context:
+            product.deserialize("not a dict")
+        
+        self.assertIn("body of request contained bad or no data", str(context.exception))
+
+    def test_deserialize_with_none_data(self):
+        """It should raise DataValidationError for None data"""
+        product = Product()
+        
+        with self.assertRaises(DataValidationError) as context:
+            product.deserialize(None)
+        
+        self.assertIn("body of request contained bad or no data", str(context.exception))
